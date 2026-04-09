@@ -2,7 +2,7 @@
 #from ast import main
 
 
-#cd C:\project_linpeichun54321
+#cd C:\projects\project_H-M_lin
 
 # 2️⃣ 建立虛擬環境
 #C:\Users\FM_pc\.local\bin\python3.14.exe -m venv venv
