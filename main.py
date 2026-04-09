@@ -3,20 +3,6 @@ import pyodbc
 import os
 
 # =========================
-# 🔐 安全連線（用環境變數）
-# =========================
-conn = pyodbc.connect(
-    f"DRIVER={{ODBC Driver 18 for SQL Server}};"
-    f"SERVER={os.getenv('DB_SERVER')};"
-    f"DATABASE={os.getenv('DB_NAME')};"
-    f"UID={os.getenv('DB_USER')};"
-    f"PWD={os.getenv('DB_PASSWORD')};"
-    "Encrypt=yes;TrustServerCertificate=no;"
-)
-cursor = conn.cursor()
-cursor.fast_executemany = True
-
-# =========================
 # 📂 檔案路徑
 # =========================
 BASE_DIR = os.path.dirname(__file__)
@@ -25,6 +11,27 @@ DATA_DIR = os.path.join(BASE_DIR, "dataset")
 articles_file = os.path.join(DATA_DIR, "articles.csv")
 customers_file = os.path.join(DATA_DIR, "customers.csv")
 transactions_file = os.path.join(DATA_DIR, "transactions_train.csv")
+
+# =========================
+# 🔗 SQL 連線
+# =========================
+server = 'linpeichunhappy.database.windows.net'
+database = 'project'
+username = 'missa'
+password = 'Cc12345678'
+driver = '{ODBC Driver 18 for SQL Server}'
+
+conn = pyodbc.connect(
+    f'DRIVER={driver};'
+    f'SERVER={server};'
+    f'DATABASE={database};'
+    f'UID={username};'
+    f'PWD={password};'
+    'Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;'
+)
+cursor = conn.cursor()
+print("✅ SQL 連線成功")
+
 
 # =========================
 # 🧼 清洗函數
