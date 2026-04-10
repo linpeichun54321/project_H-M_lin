@@ -1,6 +1,7 @@
 import pandas as pd
 import pyodbc
 import os
+from math import ceil
 
 # =========================
 # 📂 檔案路徑
@@ -16,7 +17,7 @@ transactions_file = os.path.join(DATA_DIR, "transactions_train.csv")
 # 🔗 SQL 連線
 # =========================
 server = 'linpeichunhappy.database.windows.net'
-database = 'project'
+database = 'HM'
 username = 'missa'
 password = 'Cc12345678'
 driver = '{ODBC Driver 18 for SQL Server}'
@@ -34,147 +35,219 @@ print("✅ SQL 連線成功")
 
 
 # =========================
-# 🧼 清洗函數
-# =========================
-def clean_df(df):
-    df.columns = df.columns.str.strip().str.lower()
-    for col in df.columns:
-        df[col] = df[col].astype(str).str.strip()
-    df = df.replace({'nan': None, '': None})
-    return df
-
-# =========================
-# 🏗 建表
-# =========================
-def create_tables():
-    cursor.execute("IF OBJECT_ID('transactions','U') IS NOT NULL DROP TABLE transactions")
-    cursor.execute("IF OBJECT_ID('customers','U') IS NOT NULL DROP TABLE customers")
-    cursor.execute("IF OBJECT_ID('articles','U') IS NOT NULL DROP TABLE articles")
-
-    cursor.execute("""
-    CREATE TABLE articles (
-        article_id VARCHAR(20) PRIMARY KEY,
-        product_code VARCHAR(20),
-        prod_name VARCHAR(255),
-        product_type_name VARCHAR(100),
-        product_group_name VARCHAR(100),
-        colour_group_name VARCHAR(50),
-        department_name VARCHAR(100),
-        index_name VARCHAR(50),
-        section_name VARCHAR(100),
-        garment_group_name VARCHAR(100)
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE customers (
-        customer_id VARCHAR(64) PRIMARY KEY,
-        club_member_status VARCHAR(50),
-        fashion_news_frequency VARCHAR(50),
-        age INT,
-        postal_code VARCHAR(64)
-    )
-    """)
-
-    cursor.execute("""
-    CREATE TABLE transactions (
-        transaction_id INT IDENTITY(1,1) PRIMARY KEY,
-        t_dat DATE,
-        customer_id VARCHAR(64),
-        article_id VARCHAR(20),
-        price DECIMAL(10,4),
-        sales_channel_id INT
-    )
-    """)
-
-    conn.commit()
-
-create_tables()
-
-# =========================
-# ⚡ INSERT FUNCTION（通用）
-# =========================
-def insert_batch(df, table):
-    cols = ",".join(df.columns)
-    placeholders = ",".join("?" * len(df.columns))
-    sql = f"INSERT INTO {table} ({cols}) VALUES ({placeholders})"
-
-    data = [tuple(x) for x in df.itertuples(index=False, name=None)]
-    
-    try:
-        cursor.executemany(sql, data)
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Error in {table}: {e}")
-
-# =========================
-# 🚀 1️⃣ articles（小表可一次）
+# 📂 CSV 安全讀取
 # =========================
 df_articles = pd.read_csv(articles_file, dtype=str)
-df_articles = clean_df(df_articles)
-
-df_articles = df_articles[[
-    'article_id','product_code','prod_name',
-    'product_type_name','product_group_name',
-    'colour_group_name','department_name',
-    'index_name','section_name','garment_group_name'
-]].drop_duplicates()
-
-insert_batch(df_articles, "articles")
-print("✅ articles 完成")
-
-# =========================
-# 🚀 2️⃣ customers（小表）
-# =========================
 df_customers = pd.read_csv(customers_file, dtype=str)
+df_transactions = pd.read_csv(transactions_file, dtype=str)  # 🔥 直接完整讀取以方便清洗
+
+print("✅ CSV 讀取完成")
+
+# =========================
+# 🧼 資料清洗（🔥加強版） 
+# =========================
+def clean_df(df):
+    df = df.copy()
+    for col in df.columns:
+        df[col] = df[col].astype(str).str.strip()
+    # 🔥 統一空值
+    df = df.replace({
+        'nan': None,
+        'None': None,
+        '': None,
+        'NA': None,
+        'null': None
+    })
+    return df
+
+df_articles = clean_df(df_articles)
 df_customers = clean_df(df_customers)
+df_transactions = clean_df(df_transactions)
 
-df_customers = df_customers[[
-    'customer_id','club_member_status',
-    'fashion_news_frequency','age','postal_code'
-]].drop_duplicates()
-
+# 🔥 型別轉換
 df_customers['age'] = pd.to_numeric(df_customers['age'], errors='coerce')
+df_transactions['price'] = pd.to_numeric(df_transactions['price'], errors='coerce')
+df_transactions['sales_channel_id'] = pd.to_numeric(df_transactions['sales_channel_id'], errors='coerce')
+df_transactions['t_dat'] = pd.to_datetime(df_transactions['t_dat'], errors='coerce')
 
-insert_batch(df_customers, "customers")
-print("✅ customers 完成")
-
-# =========================
-# 🚀 3️⃣ transactions（大表🔥 chunk）
-# =========================
-chunksize = 100000
-
-for chunk in pd.read_csv(transactions_file, chunksize=chunksize):
-    chunk = clean_df(chunk)
-
-    chunk = chunk[[
-        't_dat','customer_id','article_id','price','sales_channel_id'
-    ]]
-
-    # 型別轉換
-    chunk['t_dat'] = pd.to_datetime(chunk['t_dat'], errors='coerce')
-    chunk['price'] = pd.to_numeric(chunk['price'], errors='coerce')
-    chunk['sales_channel_id'] = pd.to_numeric(chunk['sales_channel_id'], errors='coerce')
-
-    insert_batch(chunk, "transactions")
-    print("⏳ transactions chunk 完成")
+print("✅ 資料清洗完成")
 
 # =========================
-# 🔗 FK（最後建立）
+# 🏷 表格 & PK
 # =========================
-cursor.execute("""
-ALTER TABLE transactions
-ADD CONSTRAINT FK_customer FOREIGN KEY (customer_id)
-REFERENCES customers(customer_id)
-""")
+tables = {
+    "articles": df_articles,
+    "customers": df_customers,
+    "transactions": df_transactions
+}
 
-cursor.execute("""
-ALTER TABLE transactions
-ADD CONSTRAINT FK_article FOREIGN KEY (article_id)
-REFERENCES articles(article_id)
-""")
+primary_keys = {
+    "articles": "article_id",
+    "customers": "customer_id",
+    "transactions": "transaction_id"  # 🔥 這裡會用 IDENTITY
+}
 
+# =========================
+# 💾 輸出 CSV
+# =========================
+OUTPUT_DIR = os.path.join(BASE_DIR, "output")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+for name, df in tables.items():
+    df.to_csv(os.path.join(OUTPUT_DIR, f"{name}.csv"), index=False)
+
+print("✅ CSV 輸出完成")
+
+# =========================
+# 🔢 型別對應
+# =========================
+type_map = {
+    "article_id": "VARCHAR(20)",
+    "customer_id": "VARCHAR(64)",
+    "age": "INT",
+    "price": "DECIMAL(10,4)",
+    "sales_channel_id": "INT",
+    "t_dat": "DATE",
+    "detail_desc": "VARCHAR(MAX)"
+}
+
+# =========================
+# 🛑 刪表
+# =========================
+for t in ["transactions", "customers", "articles"]:
+    cursor.execute(f"IF OBJECT_ID('{t}', 'U') IS NOT NULL DROP TABLE [{t}]")
 conn.commit()
+print("✅ 舊表刪除完成")
 
-print("🎉 ETL 完成（升級版）")
+# =========================
+# 🏗 建表函數（改良版）
+# =========================
+def create_table(name, df, pk=None):
+    cols = []
+    
+    # 🔥 針對 transactions 的 transaction_id 自動生成
+    if name == "transactions":
+        cols.append("[transaction_id] INT IDENTITY(1,1) PRIMARY KEY")
+    
+    for c in df.columns:
+        if name == "transactions" and c == "transaction_id":
+            continue  # 已由 IDENTITY 生成
+        # 判斷型別
+        if c == "detail_desc":
+            sql_type = "VARCHAR(MAX)"
+        elif df[c].astype(str).str.len().max() > 255:
+            sql_type = "VARCHAR(MAX)"
+        else:
+            sql_type = type_map.get(c, "VARCHAR(255)")
+        cols.append(f"[{c}] {sql_type}")
+    
+    # 🔥 一般表格主鍵檢查
+    if pk and name != "transactions" and pk in df.columns:
+        cols.append(f"PRIMARY KEY ([{pk}])")
+    
+    sql = f"CREATE TABLE [{name}] ({','.join(cols)})"
+    cursor.execute(sql)
+    conn.commit()
+    print(f"✅ 建表 {name}")
+
+# =========================
+# ⚡ 批次寫入函數（保留原邏輯）
+# =========================
+def insert_df(df, table_name, batch_size=1000):
+    df = clean_df(df)
+    df = df.where(pd.notnull(df), None)
+    for col in df.columns:
+        if col in ["age", "price", "sales_channel_id"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # transactions 不需要插入 transaction_id
+    cols = [c for c in df.columns if not (table_name=="transactions" and c=="transaction_id")]
+    cols_sql = ",".join(f"[{c}]" for c in cols)
+    placeholders = ",".join("?" for _ in cols)
+    sql = f"INSERT INTO [{table_name}] ({cols_sql}) VALUES ({placeholders})"
+
+    total = len(df)
+    batches = (total + batch_size - 1) // batch_size
+    cursor.fast_executemany = True
+
+    for i in range(batches):
+        batch = df.iloc[i*batch_size:(i+1)*batch_size]
+        data = []
+        for row in batch.itertuples(index=False, name=None):
+            new_row = []
+            for idx, val in enumerate(row):
+                col_name = df.columns[idx]
+                if table_name=="transactions" and col_name=="transaction_id":
+                    continue  # 跳過 IDENTITY
+                if val is None or val == '' or val == 'nan':
+                    new_row.append(None)
+                elif isinstance(val, float):
+                    if pd.isna(val) or val in [float('inf'), float('-inf')]:
+                        new_row.append(None)
+                    else:
+                        new_row.append(float(val))
+                else:
+                    new_row.append(val)
+            data.append(tuple(new_row))
+
+        try:
+            cursor.executemany(sql, data)
+            conn.commit()
+        except Exception as e:
+            print(f"\n❌ {table_name} 發生錯誤：", e)
+            for j, row in enumerate(data):
+                try:
+                    cursor.execute(sql, row)
+                except Exception as err:
+                    print(f"❌ 第 {i*batch_size + j} 筆錯誤:", err)
+                    print("👉 問題資料:", row)
+                    return
+        percent = ((i+1)/batches)*100
+        print(f"⏳ {table_name}: {percent:.2f}%", end="\r")
+    print(f"✅ {table_name} 完成")
+
+# =========================
+# 🔗 FK 建立
+# =========================
+def create_fk(child, col, parent, parent_col):
+    try:
+        cursor.execute(f"""
+        ALTER TABLE [{child}]
+        ADD CONSTRAINT FK_{child}_{col}
+        FOREIGN KEY ([{col}]) REFERENCES [{parent}]([{parent_col}])
+        """)
+        conn.commit()
+        print(f"🔗 FK {child}->{parent}")
+    except Exception as e:
+        print(f"⚠️ FK 失敗: {e}")
+
+# =========================
+# 🚀 建表 + 寫入
+# =========================
+for name, df in tables.items():
+    create_table(name, df, primary_keys.get(name))
+
+for name, df in tables.items():
+    insert_df(df, name)
+
+# =========================
+# 🔗 FK
+# =========================
+create_fk("transactions","customer_id","customers","customer_id")
+create_fk("transactions","article_id","articles","article_id")
+
+print("🎉 ETL 完成")
+
+# =========================
+# 📊 報表
+# =========================
+for name, df in tables.items():
+    missing = df.isnull().sum()
+    report = pd.DataFrame({
+        "欄位": missing.index,
+        "缺值數": missing.values,
+        "缺值比例": missing.values / len(df)
+    })
+    report.to_csv(os.path.join(OUTPUT_DIR, f"{name}_missing.csv"), index=False)
+
+print("📊 報表完成")
