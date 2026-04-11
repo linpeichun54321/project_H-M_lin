@@ -15,7 +15,7 @@ transactions_file = os.path.join(DATA_DIR, "transactions_train.csv")
 # 🔗 SQL 連線
 # =========================
 server = 'linpeichunhappy.database.windows.net'
-database = 'project'
+database = 'HM2'
 username = 'missa'
 password = 'Cc12345678'
 driver = '{ODBC Driver 18 for SQL Server}'

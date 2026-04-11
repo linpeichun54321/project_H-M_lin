@@ -1,0 +1,305 @@
+SELECT * FROM [dbo].[articles]
+SELECT * FROM [dbo].[customers]
+SELECT * FROM [dbo].[transactions]
+
+
+
+SELECT * FROM temp_articles
+SELECT * FROM temp_customers
+SELECT * FROM temp_transactions
+
+
+-- 創建暫存表 temp_articles
+SELECT * INTO temp_articles FROM articles WHERE 1 = 0;
+
+-- 創建暫存表 temp_customers
+SELECT * INTO temp_customers FROM customers WHERE 1 = 0;
+
+-- 創建暫存表 temp_transactions
+SELECT * INTO temp_transactions FROM transactions WHERE 1 = 0;
+
+-- 將資料從原表插入到暫存表
+INSERT INTO temp_articles
+SELECT * FROM articles;
+
+INSERT INTO temp_customers
+SELECT * FROM customers;
+
+--有問題
+INSERT INTO temp_transactions
+SELECT * FROM transactions;
+
+-------------------------------------------------------------------------------
+-------------------------------------------------------------------------------
+OK
+-- 創建暫存表 temp_customers
+SELECT * INTO temp_customers FROM customers WHERE 1 = 0;
+
+INSERT INTO temp_customers
+SELECT * FROM customers;
+
+-- 處理 temp_customers 表中的 age 欄位，將 NULL 轉換為 0
+UPDATE temp_customers
+SET age = 0
+WHERE age IS NULL;
+SELECT * FROM temp_customers
+
+-- 檢查 FN 與 Active 是否為異常值 (非 0 或 1) (無異常值，不更改)
+SELECT
+    COUNT(*) AS total_rows,
+    SUM(CASE WHEN FN IS NULL THEN 1 ELSE 0 END) AS fn_nulls,
+    SUM(CASE WHEN TRY_CAST(FN AS FLOAT) IS NULL AND FN IS NOT NULL THEN 1 ELSE 0 END) AS fn_invalid,
+    SUM(CASE WHEN Active IS NULL THEN 1 ELSE 0 END) AS active_nulls,
+    SUM(CASE WHEN TRY_CAST(Active AS FLOAT) IS NULL AND Active IS NOT NULL THEN 1 ELSE 0 END) AS active_invalid
+FROM temp_customers;
+
+-- 確保所有狀態文字都去空白且大寫
+UPDATE temp_customers
+SET club_member_status = UPPER(RTRIM(LTRIM(club_member_status)));
+
+-- 檢查 Customers ID 是否有重複
+SELECT customer_id, COUNT(*) AS cnt
+FROM temp_customers
+GROUP BY customer_id
+HAVING COUNT(*) > 1
+ORDER BY cnt DESC;
+
+-- 填補狀態類別的 NULL
+UPDATE temp_customers
+SET club_member_status = 'UNKNOWN'
+WHERE club_member_status IS NULL;
+
+--統一格式與去空白 (Standardization)
+UPDATE temp_customers
+SET fashion_news_frequency = UPPER(LTRIM(RTRIM(fashion_news_frequency)))
+WHERE fashion_news_frequency IS NOT NULL;
+
+--FN / Active NULL不改保留,因為有可能會是 unknown / missing,若都改成unknown會使變成一種「合法分類」,會污染 BI / KPI
+--NONE 明確「不看」狀態，NULL為未填 / unknown，NULL不改保留
+
+
+-- 1. 刪除原始大表 (請務必確認 temp 表資料正確！)
+DROP TABLE [dbo].[customers];
+
+-- 2. 將 temp 表改名為正式表
+EXEC sp_rename 'temp_customers', 'clean_customers';
+
+----------------------------------------------------------------
+----------------------------------------------------------------
+#OK
+SELECT * FROM [articles]
+
+SELECT * FROM [dbo].[customers]
+SELECT * FROM [dbo].[temp_articles]
+
+SELECT * INTO temp_articles FROM articles WHERE 1 = 0;
+
+INSERT INTO temp_articles
+SELECT * FROM articles;
+
+-- 檢查是否有重複的 article_id (結果:無)
+SELECT article_id, COUNT(*)
+FROM temp_articles
+GROUP BY article_id
+HAVING COUNT(*) > 1;
+
+
+-- 清洗語法：清除名稱與描述欄位的前後空格
+UPDATE temp_articles
+SET prod_name = TRIM(prod_name),
+    product_type_name = TRIM(product_type_name),
+    detail_desc = TRIM(detail_desc);
+
+-- 檢查 article_id 的實際字元長度分佈
+SELECT 
+    LEN(article_id) AS 實際長度, 
+    COUNT(*) AS 該長度的資料筆數
+FROM temp_articles
+GROUP BY LEN(article_id);
+
+
+-- 檢查 article_id 長度是否異常 (修正後使用 LEN)
+SELECT article_id, prod_name
+FROM temp_articles
+WHERE LEN(article_id) <> 10;
+
+
+-- 檢查顏色編碼是否為空值或 'Unknown'
+-- 這邊用 OR 把可能的情況都抓出來
+SELECT article_id, prod_name, colour_group_code, colour_group_name
+FROM temp_articles
+WHERE colour_group_code IS NULL 
+   OR colour_group_name = 'Unknown'
+   OR colour_group_name IS NULL;
+
+-- 如果想看有哪些 'Unknown' 的欄位分佈 
+SELECT colour_group_name, COUNT(*) as 數量
+FROM temp_articles
+GROUP BY colour_group_name
+ORDER BY 數量 DESC;
+
+-- 檢查是否有描述是空的
+SELECT COUNT(*) FROM temp_articles WHERE detail_desc IS NULL;
+
+-- 補強語法：將空描述補上預設值 'No description'
+UPDATE temp_articles
+SET detail_desc = 'No description'
+WHERE detail_desc IS NULL OR TRIM(detail_desc) = '';
+
+-- 查詢 'No description'
+SELECT *
+FROM temp_articles
+WHERE detail_desc = 'No description';
+
+-- 2. 統一產品名稱與類別為大寫 (防止 'Strap top' 和 'STRAP TOP' 被當成不同產品)
+UPDATE temp_articles
+SET prod_name = UPPER(prod_name),
+    product_type_name = UPPER(product_type_name),
+    product_group_name = UPPER(product_group_name);
+
+-- 1. 檢查 Section Name (最容易出事的地方)
+SELECT DISTINCT section_name 
+FROM temp_articles 
+ORDER BY section_name;
+
+-- 2. 檢查 Index Group Name
+SELECT DISTINCT index_group_name 
+FROM temp_articles 
+ORDER BY index_group_name;
+
+-- 3. 檢查是否有「編號相同但名稱不同」的靈異現象
+SELECT section_no, COUNT(DISTINCT section_name) as 名稱種類數
+FROM temp_articles
+GROUP BY section_no
+HAVING COUNT(DISTINCT section_name) > 1;
+
+-- 把所有剩餘的文字分類欄位全部「格式化」為大寫，達成視覺統一
+UPDATE temp_articles
+SET 
+    graphical_appearance_name = UPPER(graphical_appearance_name),
+    colour_group_name = UPPER(colour_group_name),
+    perceived_colour_value_name = UPPER(perceived_colour_value_name),
+    perceived_colour_master_name = UPPER(perceived_colour_master_name),
+    department_name = UPPER(department_name),
+    index_name = UPPER(index_name),
+    index_group_name = UPPER(index_group_name),
+    section_name = UPPER(section_name),
+    garment_group_name = UPPER(garment_group_name);
+
+
+
+ID 格式：0108775015（10 碼）和 0108775（產品編號）都保留了領先的 0，沒有被誤轉成數字。
+
+文字標準化：從 STRAP TOP 到 JERSEY BASIC，全部都統一成了全大寫且去除了多餘空格。
+
+顏色統一：BLACK 和 DARK 也都轉為大寫，這對之後做圓餅圖或銷售分佈圖非常有幫助。
+
+-- 1. 刪除原始大表 (請務必確認 temp 表資料正確！)
+DROP TABLE [dbo].[articles];
+
+
+-- 2. 將 temp 表改名為正式表
+EXEC sp_rename 'temp_articles', 'clean_articles';
+
+-------------------------------------------------------------
+-------------------------------------------------------------
+
+
+--只插入有意義的資料欄位 (ID為python自動產出，先排除)
+INSERT INTO temp_transactions (t_dat, customer_id, article_id, price, sales_channel_id)
+SELECT t_dat, customer_id, article_id, price, sales_channel_id
+FROM transactions;
+
+--查看結果 (你會發現 ID 已經自動從 1 開始排好了)
+SELECT * FROM temp_transactions;
+
+-- 去除交易表中 客戶 ID 與 商品 ID 的左右空格
+UPDATE [dbo].[temp_transactions]
+SET [customer_id] = LTRIM(RTRIM([customer_id])),
+    [article_id] = LTRIM(RTRIM([article_id]));
+
+-- 1. 新增推估價格欄位
+ALTER TABLE [dbo].[temp_transactions] 
+ADD [estimated_actual_price] DECIMAL(18, 4);
+GO
+
+-- 2. 進行推估計算 (加密值 * 1000)
+UPDATE [dbo].[temp_transactions]
+SET [estimated_actual_price] = [price] * 1000;
+
+-------------------------------------------------
+-------------------------------------------------
+-- 1. 刪除原始大表 (請務必確認 temp 表資料正確！)
+DROP TABLE [dbo].[transactions];
+DROP TABLE [dbo].[articles];
+DROP TABLE [dbo].[customers];
+
+-- 2. 將 temp 表改名為正式表
+EXEC sp_rename 'temp_articles', 'clean_articles';
+EXEC sp_rename 'temp_customers', 'clean_customers';
+EXEC sp_rename 'temp_transactions', 'clean_transactions';
+
+
+
+- 改名後補上主鍵，確保資料唯一性與查詢速度
+ALTER TABLE clean_articles ADD CONSTRAINT PK_Articles PRIMARY KEY (article_id);
+ALTER TABLE clean_customers ADD CONSTRAINT PK_Customers PRIMARY KEY (customer_id);
+-- 交易表通常用 Identity ID 當主鍵
+
+
+ALTER TABLE [dbo].[clean_transactions] 
+DROP COLUMN [transaction_id];
+
+-------------------------------------------------
+-------------------------------------------------
+
+-- 建立客戶聚合表
+SELECT 
+    c.club_member_status,
+    c.age,
+    COUNT(t.customer_id) AS transaction_count,    -- 購買次數
+    SUM(t.price) AS total_spent,                  -- 總消費金額
+    MAX(t.t_dat) AS last_purchase_date            -- 最近一次購買日期 (Recency)
+INTO [dbo].[agg_customer_behavior]
+FROM [dbo].[clean_customers] c
+JOIN [dbo].[clean_transactions] t ON c.customer_id = t.customer_id
+GROUP BY 
+    c.club_member_status, 
+    c.age;
+
+
+-- 建立產品聚合表
+SELECT 
+    a.product_group_name,
+    a.perceived_colour_master_name,
+    a.index_name,
+    COUNT(t.article_id) AS total_units_sold,       -- 總銷量
+    SUM(t.price) AS total_revenue,                -- 總營收
+    AVG(t.price) AS avg_selling_price             -- 平均售價
+INTO [dbo].[agg_article_performance]               -- 直接將結果存成新表
+FROM [dbo].[clean_articles] a
+JOIN [dbo].[clean_transactions] t ON a.article_id = t.article_id
+GROUP BY 
+    a.product_group_name, 
+    a.perceived_colour_master_name, 
+    a.index_name;
+
+-- 幫交易表的客戶 ID 建索引
+CREATE INDEX IX_Transactions_CustomerID ON [dbo].[clean_transactions] (customer_id);
+
+-- 幫交易表的產品 ID 建索引
+CREATE INDEX IX_Transactions_ArticleID ON [dbo].[clean_transactions] (article_id);
+
+-- 幫交易日期建索引
+CREATE INDEX IX_Transactions_Date ON [dbo].[clean_transactions] (t_dat);
+
+SELECT 
+    t_dat,
+    DATENAME(weekday, t_dat) AS day_of_week,     -- 星期幾
+    DATEPART(month, t_dat) AS sales_month,       -- 月份
+    COUNT(customer_id) AS daily_transactions,    -- 每日單量
+    SUM(price) AS daily_revenue,                 -- 每日營收
+    COUNT(DISTINCT customer_id) AS unique_buyers -- 每日不重複客數
+INTO [dbo].[agg_sales_trend]
+FROM [dbo].[clean_transactions]
+GROUP BY t_dat;
